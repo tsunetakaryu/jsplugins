@@ -1,0 +1,295 @@
+// (C) 2008 - 2016, TsunetakaRyu @ Ryusa Works
+
+// NO WARRANTY IS GRANTED. THIS PLUG-IN IS PROVIDED ON AN "AS IS" BASIS, WITHOUT
+// WARRANTY OF ANY KIND. NO LIABILITY IS GRANTED, INCLUDING, BUT NOT LIMITED TO,
+// ANY DIRECT OR INDIRECT,  SPECIAL,  INCIDENTAL OR CONSEQUENTIAL DAMAGE ARISING
+// OUT OF  THE  USE  OR INABILITY  TO  USE  THIS PLUG-IN,  COMPUTER FAILTURE  OF
+// MALFUNCTION INCLUDED.  THE USE OF THE SOURCE CODE,  EITHER  PARTIALLY  OR  IN
+// TOTAL, IS ONLY GRANTED,  IF USED IN THE SENSE OF THE AUTHOR'S INTENTION,  AND
+// USED WITH ACKNOWLEDGEMENT OF THE AUTHOR. FURTHERMORE IS THIS PLUG-IN A  THIRD
+// PARTY CONTRIBUTION,  EVEN IF INCLUDED IN REAPER(TM),  COCKOS INCORPORATED  OR
+// ITS AFFILIATES HAVE NOTHING TO DO WITH IT.  LAST BUT NOT LEAST, BY USING THIS
+// PLUG-IN YOU RELINQUISH YOUR CLAIM TO SUE IT'S AUTHOR, AS WELL AS THE CLAIM TO
+// ENTRUST SOMEBODY ELSE WITH DOING SO.
+//
+// Released under GPL:
+// <http://www.gnu.org/licenses/>.
+//******************************************************************************
+//References: cockos, wiki, math books
+//Special Thanks: Liteon (UI Refrences)
+//                kawa_  (Algorithm for HUE to RGB Convertion)
+//                RCjacH (Algorithm for Tempo-based Vib/Tre to Freq Convertion)
+//******************************************************************************
+
+desc: Ryusa Vibrato & Tremolo Frequency Indicator (Ryusa Works)
+//tags: visualization
+//author: Tsunetaka Ryu (QQ 408392187, yamazakiryusa@qq.com)
+//version: 1.10
+
+// ========================================
+// * Initialize                           *
+// ========================================
+slider1:1<0,1,1{Internal: Follow RVTFI,External: Follow Reaper}>Tempo Source: 
+slider2:120<1,500,1>Internal Tempo Value (BPM):
+slider3:0<0,1,1{Enable,Disable}>Indicator: 
+slider4:0<0,1,1{Straight,Triplet}>Signature: 
+slider5:0<0,1,1{Straight,Triplet (T), Dotted (D)}>Note Timing: 
+
+@slider
+slider2 < 1   ? slider2 = 1;
+slider2 > 500 ? slider2 = 500;
+
+@init
+freq_fullnote = freq_2note = freq_4note = freq_8note = freq_16note = freq_32note = freq_64note = 0;
+beat = signature = 0;
+column_x1 = 148;
+column_x2 = 316;
+row_y1 = 48;
+row_y2 = 64;
+row_y3 = 80;
+row_y4 = 96;
+row_y5 = 112;
+row_y6 = 128;
+row_y7 = 144;
+row_y8 = 160;
+row_yb = 215;
+
+// ========================================
+// * Functions                            *
+// ========================================
+
+function HSBtoRGB(hue, saturation, value) local(r, g, b, h, f, v, p, q, t) (
+  (hue > 360 || hue < 0) ? (hue = hue % 360;);
+  saturation = min(max(saturation,0),1);
+  v = floor(255 * value);
+  v = min(max(v,0),255);
+  (saturation == 0) ? (
+    r = g = b = v;
+    ):(
+    h = floor( hue / 60);
+    f = hue / 60 - h;
+    p = floor(v * (1 - saturation));
+    p = min(max(p,0),255);
+    q = floor(v * (1 - f * saturation));
+    q = min(max(q,0),255);
+    t = floor(v * (1 - (1 - f) * saturation));
+    (h == 0) ? (r = v; g = t; b = p;):
+    (h == 1) ? (r = q; g = v; b = p;):
+    (h == 2) ? (r = p; g = v; b = t;):
+    (h == 3) ? (r = p; g = q; b = v;):
+    (h == 4) ? (r = t; g = p; b = v;):
+    (h == 5) ? (r = v; g = p; b = q;):
+               (r = v; g = t; b = p;);
+  );
+  this.r = r/255;
+  this.g = g/255;
+  this.b = b/255;
+);
+
+function FreqCalc(n_timing) (
+  (slider5 == 0) ? (n_timing = 1);    // Straight
+  (slider5 == 1) ? (n_timing = 1/3);  // Triplet
+  (slider5 == 2) ? (n_timing = 3/2);  // Dotted
+  freq_fullnote = r_tempo / 240 * n_timing;
+  freq_2note    = r_tempo / 120 * n_timing;
+  freq_4note    = r_tempo / 60  * n_timing;
+  freq_8note    = r_tempo / 30  * n_timing;
+  freq_16note   = r_tempo / 15  * n_timing;
+  freq_32note   = r_tempo / 7.5 * n_timing;
+  freq_64note   = r_tempo / 3.75* n_timing;
+);
+
+function SmartIndicator(r, g, b, alpha_on, alpha_dim, x, y)(
+  beat = floor(beat_position);
+  (slider4 == 0) ? (halfsignature = 2) : (halfsignature = 3);
+  gfx_x = x; gfx_y = y;
+  (play_state == 0) ? (
+    // While stopped
+    gfx_r = gfx_g = gfx_b = 1; gfx_a = alpha_on;
+    gfx_drawchar($'O');
+    ):(
+    // While playing or paused
+    gfx_r = r; gfx_g = g; gfx_b = b;
+    (beat % halfsignature) != 0 ? (
+      gfx_a = alpha_on;
+      gfx_drawchar($'0');
+      ):(
+      gfx_a = alpha_dim;
+      gfx_drawchar($'O');
+    );
+  );
+);
+
+function SmartBeat(r, g, b, alpha_on, alpha_dim, x, y, offset)(
+  beat = floor(beat_position);
+  // Hide the 4th beat while signature type == triplet
+  (slider4 == 1 && offset == 3) ? (
+    gfx_r = gfx_g = gfx_b = 0;
+    ):(
+    gfx_r = r; gfx_g = g; gfx_b = b;
+  );
+  gfx_x = x; gfx_y = y;
+  (play_state == 0) ? (
+    // While stopped
+    gfx_a = alpha_dim;
+    gfx_drawchar($'|');
+    ):(
+    // While playing or paused
+    ((beat - offset) % signature) != 0 ? (
+      gfx_a = alpha_dim;
+      gfx_drawchar($'|');
+      ):(
+      gfx_a = alpha_on;
+      gfx_drawchar($'>');
+    );
+  );
+);
+
+function SmartDrawChar(r, g, b, a, column, row, char) (
+  gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = a;
+  gfx_x = column;
+  gfx_y = row;
+  gfx_drawchar(char);
+);
+
+function SmartDrawString(r, g, b, a, column, row, char) (
+  gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = a;
+  gfx_x = column;
+  gfx_y = row;
+  gfx_drawstr(char);
+);
+
+function SmartDrawNoteChar(r, g, b, a, column, row, char, final_flag) (
+  gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = a;
+  gfx_x = column;
+  gfx_y = row;
+  gfx_drawchar(char);
+  (final_flag == 1) ? (
+    (slider5 == 0) ? (
+      return;
+      );
+    (slider5 == 1) ? (
+      gfx_a = 0.5;
+      gfx_drawstr(" T");
+      );
+    (slider5 == 2) ? (
+      gfx_a = 0.5;
+      gfx_drawstr(" D");
+      );
+    ):(
+    return;
+  );
+);
+
+function SmartDrawNumber(r, g, b, a, column, row, number, digit) (
+  gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = a;
+  gfx_x = column;
+  gfx_y = row;
+  (tempo != 0) ? (
+    gfx_drawnumber(number, digit);
+    ):(
+    gfx_drawchar($'-');
+  );
+);
+
+function SmartDrawRectto(r, g, b, a, x1, y1, x2, y2) (
+  gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = a;
+  gfx_x = x1;
+  gfx_y = y1;
+  gfx_rectto(x2,y2);
+);
+
+// ========================================
+// * Artworks                             *
+// ========================================
+@gfx 425 272
+// Tempo Source
+slider1 == 0 ? (
+  r_tempo = slider2; // Internal Mode
+  ) : (
+  r_tempo = tempo;   // External Mode
+);
+
+SmartDrawRectto(1, 1, 1, 0.7,   0, 179, 512, 180);                          // Big border
+HSBtoRGB(r_tempo, 0.6, 0.5);
+SmartDrawRectto(HSBtoRGB.r, HSBtoRGB.g, HSBtoRGB.b, 0.7, 0, 180, 512, 261); // Big box 1 -- Colorful Toolbar
+SmartDrawRectto(1, 1, 1, 0.1,   0, 180, 512, 190);                          // Big box 2
+SmartDrawRectto(0, 0, 0, 0.5,   0, 245, 512, 261);                          // Big box 3
+SmartDrawRectto(0, 0, 0, 1  , 250, 210, 315, 227);                          // Ch Tempo box
+SmartDrawRectto(1, 1, 1, 0.5,   0, 36 , 512, 38 );                          // Separater
+
+// ========================================
+// * Texts                                *
+// ========================================
+// -- Digimarks
+SmartDrawString(1, 1, 1, 1, 20, 20, "Ryusa Vibrato & Tremolo Freq Indicator");
+
+// -- Bypass info
+r_tempo != nil ? (
+  gfx_r = gfx_g = gfx_b = 0.0;
+  ) : (
+  gfx_r = 1.0; gfx_g = gfx_b = 0.0;
+);
+gfx_a = 1;
+gfx_x = 356;
+gfx_y = row_y8;
+gfx_drawstr("BYPASSED");
+
+// -- Tempo infos
+SmartDrawString(1, 1, 1, 1, 200, row_yb, "Tempo");
+SmartDrawString(1, 1, 1, 1, 325, row_yb, "BPM");
+gfx_x = 255;
+gfx_r = 1; gfx_g = gfx_b = 0;
+// ** While plugin bypassed, display "---" in the tempo box
+r_tempo != nil ? (
+  gfx_drawnumber(r_tempo,3);
+  ) : (
+  gfx_drawstr("------");
+);
+
+// ----------------------------------------
+// * Beat Indicator                       *
+// ----------------------------------------
+// Not avalible in Internal Mode
+slider1 != 0 && slider3 != 1 ? (
+  // External Mode
+  (slider3 == 0) ? (signature = 4);
+  (slider4 == 1) ? (signature = 3);
+  SmartDrawRectto(0, 0, 0, 1, 20, 210, 114, 227);   // Ch indicator box
+  SmartIndicator(1.0, 0, 0, 1.0, 0.5, 40, row_yb);  // ** Indicator
+  SmartBeat(1.0, 1.0, 1.0, 1.0, 0.5, 68, row_yb, 0);  // ** 1st Beat
+  SmartBeat(1.0, 1.0, 1.0, 1.0, 0.5, 76, row_yb, 1);  // ** 2nd Beat
+  SmartBeat(1.0, 1.0, 1.0, 1.0, 0.5, 84, row_yb, 2);  // ** 3rd Beat
+  SmartBeat(1.0, 1.0, 1.0, 1.0, 0.5, 92, row_yb, 3);  // ** 4th Beat
+  ) : (
+  // Internal Mode
+  return;
+);
+
+// ========================================
+// * Frequency Indicator                  *
+// ========================================
+// -- Strings
+SmartDrawString(1, 0, 0, 1, column_x1, row_y1, "Note (x^-1)");
+SmartDrawString(1, 0, 0, 1, column_x2, row_y1, "Freq (Hz)");
+
+SmartDrawNoteChar(1, 1, 1, 1, column_x1,   row_y2, $'1', 1);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1,   row_y3, $'2', 1);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1,   row_y4, $'4', 1);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1,   row_y5, $'8', 1);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1,   row_y6, $'1', 0);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1+8, row_y6, $'6', 1);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1,   row_y7, $'3', 0);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1+8, row_y7, $'2', 1);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1  , row_y8, $'6', 0);
+SmartDrawNoteChar(1, 1, 1, 1, column_x1+8, row_y8, $'4', 1);
+
+// -- Values
+FreqCalc();
+SmartDrawNumber(1, 1, 1, 1, column_x2, row_y2, freq_fullnote, 3);
+SmartDrawNumber(1, 1, 1, 1, column_x2, row_y3, freq_2note,    3);
+SmartDrawNumber(1, 1, 1, 1, column_x2, row_y4, freq_4note,    3);
+SmartDrawNumber(1, 1, 1, 1, column_x2, row_y5, freq_8note,    3);
+SmartDrawNumber(1, 1, 1, 1, column_x2, row_y6, freq_16note,   3);
+SmartDrawNumber(1, 1, 1, 1, column_x2, row_y7, freq_32note,   3);
+SmartDrawNumber(1, 1, 1, 1, column_x2, row_y8, freq_64note,   3);

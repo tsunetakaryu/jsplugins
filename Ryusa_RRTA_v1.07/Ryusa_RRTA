@@ -1,0 +1,571 @@
+// (C) 2008 - 2016, TsunetakaRyu @ Ryusa Works
+
+// NO WARRANTY IS GRANTED. THIS PLUG-IN IS PROVIDED ON AN "AS IS" BASIS, WITHOUT
+// WARRANTY OF ANY KIND. NO LIABILITY IS GRANTED, INCLUDING, BUT NOT LIMITED TO,
+// ANY DIRECT OR INDIRECT,  SPECIAL,  INCIDENTAL OR CONSEQUENTIAL DAMAGE ARISING
+// OUT OF  THE  USE  OR INABILITY  TO  USE  THIS PLUG-IN,  COMPUTER FAILTURE  OF
+// MALFUNCTION INCLUDED.  THE USE OF THE SOURCE CODE,  EITHER  PARTIALLY  OR  IN
+// TOTAL, IS ONLY GRANTED,  IF USED IN THE SENSE OF THE AUTHOR'S INTENTION,  AND
+// USED WITH ACKNOWLEDGEMENT OF THE AUTHOR. FURTHERMORE IS THIS PLUG-IN A  THIRD
+// PARTY CONTRIBUTION,  EVEN IF INCLUDED IN REAPER(TM),  COCKOS INCORPORATED  OR
+// ITS AFFILIATES HAVE NOTHING TO DO WITH IT.  LAST BUT NOT LEAST, BY USING THIS
+// PLUG-IN YOU RELINQUISH YOUR CLAIM TO SUE IT'S AUTHOR, AS WELL AS THE CLAIM TO
+// ENTRUST SOMEBODY ELSE WITH DOING SO.
+//
+// Released under GPL:
+// <http://www.gnu.org/licenses/>.
+//******************************************************************************
+//References: cockos, wiki, math books
+//Special Thanks: Liteon (UI Refrences)
+//                kawa_  (Algorithm for HUE to RGB Convertion)
+//******************************************************************************
+
+desc: Ryusa Reference Time Assistor (Ryusa Works)
+//tags: visualization
+//author: Tsunetaka Ryu (QQ 408392187, yamazakiryusa@qq.com)
+//version: 1.07
+
+// ========================================
+// * Initialize                           *
+// ========================================
+slider1:1.5<0.3,2.0>Maximum Room Reverb Time (s):
+slider2:4.5<1.5,5.0>Maximum Hall Reverb Time (s):
+slider3:1<0,1,1{Internal: Follow the RRTA,External: Follow the Reaper}>Tempo Source:
+slider4:120<1,500,1>Internal Tempo Value (BPM):
+slider5:0<0,1,1{Enable,Disable}>Indicator:
+slider6:0<0,1,1{Straight,Triplet}>Signature:
+
+@init
+flag = 0;                                    // If tempo >= 120, flag return 2, else return 1
+cr1 = cr2 = cr3 = cr4 = cr5 = cr6 = cr7 = 0; // Compressor recommended release time
+rrvt_l = rrvt_s = 0;                         // Room reverb recommended reverbration time
+hrvt_l = hrvt_s = 0;                         // Hall reverb recommended reverbration time
+rrpd = prpd = hrpd = 0;                      // Room, plate and hall reverb recommended pre-delays time
+rrvt_bias = hrvt_bias = 0;                   // Use to half the large values
+column_x1 = 20;
+column_x2 = 160;
+column_x3 = 324;
+column_x4 = 212;
+row_y1    = 48;
+row_y2    = 64;
+row_y3    = 80;
+row_y4    = 96;
+row_y5    = 112;
+row_y6    = 128;
+row_y7    = 144;
+row_y8    = 160;
+row_yb    = 215;
+
+// ** 1.06 Sliders Behavior Fix
+@slider
+// ** 1.05 Value Cap
+slider1 < 0.3 ? slider1 = 0.3;
+slider1 > 2.0 ? slider1 = 2.0;
+slider2 < 1.5 ? slider2 = 1.5;
+slider2 > 5.0 ? slider2 = 5.0;
+slider4 < 1   ? slider4 = 1;
+slider4 > 500 ? slider4 = 500;
+sMaxRoomVerbTime = slider1;
+sMaxHallVerbTime = slider2;
+sInterTempoValue = slider4;
+
+// ========================================
+// * Functions                            *
+// ========================================
+
+@init
+
+function HSBtoRGB(hue, saturation, value) local(r, g, b, h, f, v, p, q, t) (
+  (hue > 360 || hue < 0) ? (hue = hue % 360;);
+  saturation = min(max(saturation,0),1);
+  v = floor(255 * value);
+  v = min(max(v,0),255);
+  (saturation == 0) ? (
+    r = g = b = v;
+    ):(
+    h = floor( hue / 60);
+    f = hue / 60 - h;
+    p = floor(v * (1 - saturation));
+    p = min(max(p,0),255);
+    q = floor(v * (1 - f * saturation));
+    q = min(max(q,0),255);
+    t = floor(v * (1 - (1 - f) * saturation));
+    (h == 0) ? (r = v; g = t; b = p;):
+    (h == 1) ? (r = q; g = v; b = p;):
+    (h == 2) ? (r = p; g = v; b = t;):
+    (h == 3) ? (r = p; g = q; b = v;):
+    (h == 4) ? (r = t; g = p; b = v;):
+    (h == 5) ? (r = v; g = p; b = q;):
+               (r = v; g = t; b = p;);
+  );
+  this.r = r/255;
+  this.g = g/255;
+  this.b = b/255;
+);
+
+function CompTimeCalc() (
+  cr1 = 1/r_tempo*60000/16;
+  cr2 = 1/r_tempo*60000/8;
+  cr3 = 1/r_tempo*60000/4;
+  cr4 = 1/r_tempo*60000/2;
+  cr5 = 1/r_tempo*60000;
+  cr6 = 1/r_tempo*60000*2;
+  cr7 = 1/r_tempo*60000*4;
+);
+
+function RoomTimeCalc() (
+  // -- Values
+  rrvt_l = 1 / r_tempo * 60000 / 512;
+  rrvt_s = 1 / r_tempo * 60000 / 1024;
+  rrpd   = 1 / r_tempo * 60000 / 32;
+
+  // ** Fix too big value
+  rrvt_l > sMaxRoomVerbTime ? (
+    rrvt_bias = 2;
+    ) : (
+    rrvt_bias = 1;
+  );
+  (rrvt_l > 15) ? (rrvt_l %= 15;);
+  (rrvt_s > 15) ? (rrvt_s %= 15;);
+  (rrpd  > 100) ? (rrpd  %= 100;);
+  // -- Room verb time
+  rrvt_l/rrvt_bias > sMaxRoomVerbTime ? (
+    gfx_r = gfx_g = gfx_b = 0;
+    ) : (
+    gfx_r = gfx_g = gfx_b = 1;
+  );
+  gfx_x = column_x3; gfx_y = row_y2;
+  // ** 1.04 While plugin bypassed, display "---"
+  r_tempo != nil ? (
+    gfx_drawnumber(rrvt_l/rrvt_bias,2);
+    ) : (
+    gfx_drawchar($'-');
+    );
+  // ** Hide too short value
+  rrvt_s/rrvt_bias < 0.3 ? (
+    gfx_r = gfx_g = gfx_b = 0;
+    ) : (
+    gfx_r = gfx_g = gfx_b = 1;
+  );
+  gfx_x = column_x3; gfx_y = row_y3;
+  // ** 1.04 While plugin bypassed, display "---"
+  r_tempo != nil ? (
+    gfx_drawnumber(rrvt_s/rrvt_bias,2);
+    ) : (
+    gfx_drawchar($'-');
+    );
+  // -- Room pre-delays time ( 0ms - 30ms)
+  gfx_r = gfx_g = gfx_b = 1;
+  gfx_x = column_x4; gfx_y = row_y2;
+  // ** Fix too big value
+  // ** 1.04 While plugin bypassed, display "---"
+  r_tempo != nil ? (
+    rrpd > 30 ? (
+      gfx_drawnumber(rrpd/2,1);
+      ) : (
+      gfx_drawnumber(rrpd,1);
+    );
+    ) : (
+    gfx_drawchar($'-');
+  );
+);
+
+function PlateTimeCalc() (
+  // -- Value
+  prpd = 1 / r_tempo * 60000 / 16;
+  (prpd  > 100) ? (prpd  %= 100;);
+  // -- Plate reverb time
+  gfx_x = column_x3; gfx_y = row_y4;
+  // ** 1.04 While plugin bypassed, display "---"
+  r_tempo != nil ? (
+    gfx_r = gfx_g = gfx_b = 0.5;
+    gfx_drawchar($'*');
+    gfx_drawchar($'A');
+    gfx_drawchar($'N');
+    gfx_drawchar($'Y');
+    gfx_drawchar($'*');
+    ) : (
+    gfx_r = gfx_g = gfx_b = 1.0;
+    gfx_drawchar($'-');
+    );
+
+  // -- Plate pre-delays time ( 10ms - 100ms)
+  gfx_r = gfx_g = gfx_b = 1;
+  gfx_x = column_x4;
+  gfx_y = row_y4;
+  // ** Fix too big value
+  // ** 1.04 While plugin bypassed, display "---"
+  r_tempo != nil ? (
+    rrpd > 30 ? (
+      gfx_drawnumber(prpd/2,1);
+      ) : (
+      gfx_drawnumber(prpd,1);
+    );
+    ) : (
+    gfx_drawchar($'-');
+  );
+);
+
+function HallTimeCalc() (
+  // -- Values
+  hrvt_l = 1 / r_tempo * 60000 / 128;
+  hrvt_s = 1 / r_tempo * 60000 / 256;
+  hrpd   = 1 / r_tempo * 60000 / 8;
+  // ** Fix too big value
+  hrvt_l > sMaxHallVerbTime ? (
+    hrvt_bias = 2;
+  ) : (
+    hrvt_bias = 1;
+  );
+  (hrvt_l > 15) ? (hrvt_l %= 15;);
+  (hrvt_s > 15) ? (hrvt_s %= 15;);
+  // -- Hall reverb time
+  // ** Hide cap value
+  hrvt_l/hrvt_bias > sMaxHallVerbTime ? (
+    gfx_r = gfx_g = gfx_b = 0;
+    ) : (
+    gfx_r = gfx_g = gfx_b = 1;
+  );
+  gfx_x = column_x3; gfx_y = row_y6;
+  // ** 1.04 While plugin bypassed, display "---"
+  r_tempo != nil ? (
+    gfx_drawnumber(hrvt_l/hrvt_bias,2);
+    ) : (
+    gfx_drawchar($'-');
+  );
+  // ** Hide too short value
+  hrvt_s/hrvt_bias < 1.5 ? (
+    gfx_r = gfx_g = gfx_b = 0;
+    ) : (
+    gfx_r = gfx_g = gfx_b = 1;
+  );
+  gfx_x = column_x3; gfx_y = row_y7;
+  // ** 1.04 While plugin bypassed, display "---"
+  r_tempo != nil ? (
+    gfx_drawnumber(hrvt_s/hrvt_bias,2);
+    ) : (
+    gfx_drawchar($'-');
+  );
+
+  // -- Hall pre-delays time ( 30ms - 100ms)
+  gfx_r = gfx_g = gfx_b = 1;
+  gfx_x = 212;
+  gfx_y = 128;
+  // ** Fix too big value
+  // ** 1.04 While plugin bypassed, display "---"
+  r_tempo != nil ? (
+    hrpd > 70 ? (
+      gfx_drawnumber(hrpd/2,1);
+      ) : (
+      gfx_drawnumber(hrpd,1);
+    );
+    ) : (
+    gfx_drawchar($'-');
+  );
+);
+
+function SmartIndicator(r, g, b, alpha_on, alpha_dim, x, y)(
+  beat = floor(beat_position);
+  (slider6 == 0) ? (halfsignature = 2) : (halfsignature = 3);
+  gfx_x = x; gfx_y = y;
+  (play_state == 0) ? (
+    // While stopped
+    gfx_r = gfx_g = gfx_b = 1; gfx_a = alpha_on;
+    gfx_drawchar($'O');
+    ):(
+    // While playing or paused
+    gfx_r = r; gfx_g = g; gfx_b = b;
+    (beat % halfsignature) != 0 ? (
+      gfx_a = alpha_on;
+      gfx_drawchar($'0');
+      ):(
+      gfx_a = alpha_dim;
+      gfx_drawchar($'O');
+    );
+  );
+);
+
+function SmartBeat(r, g, b, alpha_on, alpha_dim, x, y, offset)(
+  beat = floor(beat_position);
+  // Hide the 4th beat while signature type == triplet
+  (slider6 == 1 && offset == 3) ? (
+    gfx_r = gfx_g = gfx_b = 0;
+    ):(
+    gfx_r = r; gfx_g = g; gfx_b = b;
+  );
+  gfx_x = x; gfx_y = y;
+  (play_state == 0) ? (
+    // While stopped
+    gfx_a = alpha_dim;
+    gfx_drawchar($'|');
+    ):(
+    // While playing or paused
+    ((beat - offset) % signature) != 0 ? (
+      gfx_a = alpha_dim;
+      gfx_drawchar($'|');
+      ):(
+      gfx_a = alpha_on;
+      gfx_drawchar($'>');
+    );
+  );
+);
+
+function SmartDarwChar(r, g, b, a, column, row, char) (
+  gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = a;
+  gfx_x = column;
+  gfx_y = row;
+  gfx_drawchar(char);
+);
+
+function SmartDrawCompNumber(r, g, b, a, column, row, number, digit) (
+  gfx_r = r; gfx_g = g; gfx_b = b;
+  // ** Draw grey color if value smaller than 50 or larger than 1000
+  (number < 50 || number > 1000) ? (gfx_a = 0.5) : (gfx_a = a);
+  gfx_x = column;
+  gfx_y = row;
+  gfx_drawnumber(number, digit);
+);
+
+function SmartDrawRectto(r, g, b, a, x1, y1, x2, y2) (
+  gfx_r = r; gfx_g = g; gfx_b = b; gfx_a = a;
+  gfx_x = x1;
+  gfx_y = y1;
+  gfx_rectto(x2,y2);
+);
+
+function GetTempoSource(source) local(r) (
+  source == 0 ? (
+    this.r = slider4;
+    ) : (
+    this.r = tempo;
+  );
+);
+
+// ========================================
+// * Artworks                             *
+// ========================================
+
+@gfx 425 272
+// ** 1.05 Introducing an option that able to alter the tempo source from internal / external
+r_tempo = GetTempoSource(slider3);
+SmartDrawRectto(1, 1, 1, 0.7,   0, 179, 512, 180);                          // Big border
+HSBtoRGB(r_tempo, 0.6, 0.5);                                                // Colorful Toolbar
+SmartDrawRectto(HSBtoRGB.r, HSBtoRGB.g, HSBtoRGB.b, 0.7, 0, 180, 512, 261); // Big box 1 -- Colorful Toolbar
+SmartDrawRectto(1, 1, 1, 0.1,   0, 180, 512, 190);                          // Big box 2
+SmartDrawRectto(0, 0, 0, 0.5,   0, 245, 512, 261);                          // Big box 3
+SmartDrawRectto(0, 0, 0, 1  , 250, 210, 315, 227);                          // Ch Tempo box
+SmartDrawRectto(1, 1, 1, 0.5,   0, 36 , 512, 38 );                          // Separater
+
+// ========================================
+// * Texts                                *
+// ========================================
+// -- Digimarks
+gfx_r = gfx_g = gfx_b = 1; gfx_a = 1;
+gfx_x = 20; gfx_y = 20;
+gfx_drawchar($'R');
+gfx_drawchar($'y');
+gfx_drawchar($'u');
+gfx_drawchar($'s');
+gfx_drawchar($'a');
+gfx_drawchar($' ');
+gfx_drawchar($'R');
+gfx_drawchar($'e');
+gfx_drawchar($'f');
+gfx_drawchar($'e');
+gfx_drawchar($'r');
+gfx_drawchar($'e');
+gfx_drawchar($'n');
+gfx_drawchar($'c');
+gfx_drawchar($'e');
+gfx_drawchar($' ');
+gfx_drawchar($'T');
+gfx_drawchar($'i');
+gfx_drawchar($'m');
+gfx_drawchar($'e');
+gfx_drawchar($' ');
+gfx_drawchar($'A');
+gfx_drawchar($'s');
+gfx_drawchar($'s');
+gfx_drawchar($'i');
+gfx_drawchar($'s');
+gfx_drawchar($'t');
+gfx_drawchar($'o');
+gfx_drawchar($'r');
+
+// -- 1.04 Bypass info
+r_tempo != nil ? (
+  gfx_r = gfx_g = gfx_b = 0.0;
+  ) : (
+  gfx_r = 1.0; gfx_g = gfx_b = 0.0;
+);
+gfx_a = 1;
+gfx_x = 356; gfx_y = 160;
+gfx_drawchar($'B');
+gfx_drawchar($'Y');
+gfx_drawchar($'P');
+gfx_drawchar($'A');
+gfx_drawchar($'S');
+gfx_drawchar($'S');
+gfx_drawchar($'E');
+gfx_drawchar($'D');
+
+// -- Tempo infos
+gfx_r = gfx_g = gfx_b = 1.0;
+gfx_x = 200; gfx_y = 215;
+gfx_drawchar($'T');
+gfx_drawchar($'e');
+gfx_drawchar($'m');
+gfx_drawchar($'p');
+gfx_drawchar($'o');
+gfx_x = 325;
+gfx_drawchar($'B');
+gfx_drawchar($'P');
+gfx_drawchar($'M');
+gfx_x = 255;
+gfx_r = 1; gfx_g = gfx_b = 0;
+// ** 1.04 While plugin bypassed, display "---" in the tempo box
+r_tempo != nil ? (
+  gfx_drawnumber(r_tempo,3);
+  ) : (
+  gfx_drawchar($'-');
+  gfx_drawchar($'-');
+  gfx_drawchar($'-');
+  gfx_drawchar($'-');
+  gfx_drawchar($'-');
+  gfx_drawchar($'-');
+);
+
+// ----------------------------------------
+// * Beat Indicator                       *
+// ----------------------------------------
+// Not avalible in Internal Mode
+slider3 != 0 && slider5 != 1 ? (
+  // External Mode
+  (slider6 == 0) ? (signature = 4);
+  (slider6 == 1) ? (signature = 3);
+  SmartDrawRectto(0, 0, 0, 1, 20, 210, 114, 227);   // Ch indicator box
+  SmartIndicator(1.0, 0, 0, 1.0, 0.5, 40, row_yb);  // ** Indicator
+  SmartBeat(1.0, 1.0, 1.0, 1.0, 0.5, 68, row_yb, 0);  // ** 1st Beat
+  SmartBeat(1.0, 1.0, 1.0, 1.0, 0.5, 76, row_yb, 1);  // ** 2nd Beat
+  SmartBeat(1.0, 1.0, 1.0, 1.0, 0.5, 84, row_yb, 2);  // ** 3rd Beat
+  SmartBeat(1.0, 1.0, 1.0, 1.0, 0.5, 92, row_yb, 3);  // ** 4th Beat
+  ) : (
+  // Internal Mode
+  return;
+);
+
+// ========================================
+// * Compressor Release Recommended Value *
+// ========================================
+// -- Strings
+gfx_r = 1; gfx_g = gfx_b = 0; gfx_a = 1;
+gfx_x = column_x1; gfx_y = row_y1;
+gfx_drawchar($'C');
+gfx_drawchar($'o');
+gfx_drawchar($'m');
+gfx_drawchar($'p');
+gfx_drawchar($' ');
+gfx_drawchar($'R');
+gfx_drawchar($'L');
+gfx_drawchar($'S');
+gfx_drawchar($' ');
+gfx_drawchar($'(');
+gfx_drawchar($'m');
+gfx_drawchar($'s');
+gfx_drawchar($')');
+gfx_drawchar($':');
+// -- Values
+r_tempo != nil ? (
+  CompTimeCalc();
+  SmartDrawCompNumber(1, 1, 1, 1, column_x1, row_y2, cr1, 0);
+  SmartDrawCompNumber(1, 1, 1, 1, column_x1, row_y3, cr2, 0);
+  SmartDrawCompNumber(1, 1, 1, 1, column_x1, row_y4, cr3, 0);
+  SmartDrawCompNumber(1, 1, 1, 1, column_x1, row_y5, cr4, 0);
+  SmartDrawCompNumber(1, 1, 1, 1, column_x1, row_y6, cr5, 0);
+  SmartDrawCompNumber(1, 1, 1, 1, column_x1, row_y7, cr6, 0);
+  SmartDrawCompNumber(1, 1, 1, 1, column_x1, row_y8, cr7, 0);
+  ) : (
+  // ** 1.04 While plugin bypassed, display "---"
+  SmartDarwChar(1, 1, 1, 1, column_x1, row_y2, $'-');
+  SmartDarwChar(1, 1, 1, 1, column_x1, row_y3, $'-');
+  SmartDarwChar(1, 1, 1, 1, column_x1, row_y4, $'-');
+  SmartDarwChar(1, 1, 1, 1, column_x1, row_y5, $'-');
+  SmartDarwChar(1, 1, 1, 1, column_x1, row_y6, $'-');
+  SmartDarwChar(1, 1, 1, 1, column_x1, row_y7, $'-');
+  SmartDarwChar(1, 1, 1, 1, column_x1, row_y8, $'-');
+);
+
+// ========================================
+// * Reverbration Recommended Value       *
+// ========================================
+// -- Strings
+gfx_r = 1; gfx_g = gfx_b = 0; gfx_a = 1;
+gfx_x = column_x2; gfx_y = row_y1;
+gfx_drawchar($'P');
+gfx_drawchar($'r');
+gfx_drawchar($'e');
+gfx_drawchar($' ');
+gfx_drawchar($'D');
+gfx_drawchar($'e');
+gfx_drawchar($'l');
+gfx_drawchar($'a');
+gfx_drawchar($'y');
+gfx_drawchar($'s');
+gfx_drawchar($' ');
+gfx_drawchar($'(');
+gfx_drawchar($'m');
+gfx_drawchar($'s');
+gfx_drawchar($')');
+gfx_drawchar($':');
+gfx_r = 1; gfx_g = gfx_b = 0; gfx_a = 1;
+gfx_x = column_x3; gfx_y = row_y1;
+gfx_drawchar($'R');
+gfx_drawchar($'v');
+gfx_drawchar($'b');
+gfx_drawchar($' ');
+gfx_drawchar($'T');
+gfx_drawchar($'i');
+gfx_drawchar($'m');
+gfx_drawchar($'e');
+gfx_drawchar($' ');
+gfx_drawchar($'(');
+gfx_drawchar($'s');
+gfx_drawchar($')');
+gfx_drawchar($':');
+
+// ------------------------------
+// * Room                       *
+// ------------------------------
+
+// -- Doubling value flag
+gfx_r = gfx_g = gfx_b = 1; gfx_a = 1;
+gfx_x = column_x2; gfx_y = row_y2;
+gfx_drawchar($'R');
+gfx_drawchar($'O');
+gfx_drawchar($'O');
+gfx_drawchar($'M');
+RoomTimeCalc();
+
+// ------------------------------
+// * Plate                      *
+// ------------------------------
+// -- Strings
+gfx_x = column_x2; gfx_y = row_y4;
+gfx_drawchar($'P');
+gfx_drawchar($'L');
+gfx_drawchar($'A');
+gfx_drawchar($'T');
+gfx_drawchar($'E');
+PlateTimeCalc();
+
+// ------------------------------
+// * Hall                       *
+// ------------------------------
+// -- Strings
+gfx_r = gfx_g = gfx_b = 1;
+gfx_x = column_x2; gfx_y = row_y6;
+gfx_drawchar($'H');
+gfx_drawchar($'A');
+gfx_drawchar($'L');
+gfx_drawchar($'L');
+HallTimeCalc();
